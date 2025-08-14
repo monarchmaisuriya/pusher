@@ -69,6 +69,23 @@
       .controls {
         margin-top: 20px;
       }
+
+      .debug-info {
+        margin-top: 30px;
+        padding: 15px;
+        background-color: #f8f9fa;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
+        max-width: 600px;
+        font-size: 12px;
+        color: #6c757d;
+      }
+
+      .debug-info h3 {
+        margin-top: 0;
+        color: #495057;
+        font-size: 14px;
+      }
     </style>
   </head>
 
@@ -77,10 +94,29 @@
     <p>Subscribe to receive notifications</p>
     <button id="subscribe">Subscribe</button>
     <div class="controls">
+      <button id="checkPermissions">Check Permissions</button>
       <button id="checkSubscriptions">Check Subscriptions</button>
       <button id="testNotification">Send Test Notification</button>
     </div>
     <div id="message"></div>
+
+    <div class="debug-info">
+      <h3>Debug Information</h3>
+      <div id="debugInfo">
+        <p>Service Worker Support: <span id="swSupport">Checking...</span></p>
+        <p>Push Manager Support: <span id="pmSupport">Checking...</span></p>
+        <p>Notification Permission: <span id="notifPermission">Checking...</span></p>
+        <p>Service Workers Registered: <span id="swRegistered">Checking...</span></p>
+      </div>
+    </div>
+
+    <div style="margin-top: 20px; max-width: 500px; text-align: center; font-size: 14px; color: #666;">
+      <p><strong>If notifications are blocked:</strong></p>
+      <p>1. Click the lock icon (🔒) or settings icon next to the URL</p>
+      <p>2. Change Notifications from "Block" to "Allow"</p>
+      <p>3. Refresh the page and try again</p>
+      <p><strong>Note:</strong> Check browser console (F12) for detailed logs</p>
+    </div>
     <script src="main.js"></script>
   </body>
 

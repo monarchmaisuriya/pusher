@@ -1,4 +1,5 @@
 const subscribeButton = document.getElementById('subscribe');
+const checkPermissionsButton = document.getElementById('checkPermissions');
 const checkSubscriptionsButton = document.getElementById('checkSubscriptions');
 const testNotificationButton = document.getElementById('testNotification');
 
@@ -28,6 +29,43 @@ const displayMessage = (text, isError = false) => {
   messageElement.className = isError ? 'error' : 'success';
 };
 
+const updateDebugInfo = () => {
+  const swSupport = document.getElementById('swSupport');
+  const pmSupport = document.getElementById('pmSupport');
+  const notifPermission = document.getElementById('notifPermission');
+  const swRegistered = document.getElementById('swRegistered');
+
+  if (swSupport) swSupport.textContent = ('serviceWorker' in navigator) ? 'Yes' : 'No';
+  if (pmSupport) pmSupport.textContent = ('PushManager' in window) ? 'Yes' : 'No';
+  if (notifPermission) notifPermission.textContent = Notification.permission;
+  
+  if (swRegistered) {
+    navigator.serviceWorker.getRegistrations().then(registrations => {
+      swRegistered.textContent = registrations.length > 0 ? `${registrations.length} worker(s)` : 'None';
+    }).catch(() => {
+      swRegistered.textContent = 'Error checking';
+    });
+  }
+};
+
+const checkNotificationPermission = () => {
+  console.log('Checking notification permission...');
+  const permission = Notification.permission;
+  console.log('Current notification permission:', permission);
+  
+  updateDebugInfo();
+  
+  if (permission === 'denied') {
+    displayMessage('Notifications are blocked. Click the lock icon next to the URL to enable them.', true);
+  } else if (permission === 'default') {
+    displayMessage('Ready to subscribe. Click Subscribe to enable notifications.', false);
+  } else if (permission === 'granted') {
+    displayMessage('Notifications are enabled. You can subscribe to push notifications.', false);
+  }
+  
+  return permission;
+};
+
 const subscribe = async () => {
   console.log('Subscribe button clicked');
   displayMessage('Starting subscription process...', false);
@@ -40,6 +78,28 @@ const subscribe = async () => {
   if (!('PushManager' in window)) {
     displayMessage('Push messaging is not supported in this browser.', true);
     return;
+  }
+
+  // Check and request notification permission
+  console.log('Current notification permission:', Notification.permission);
+  
+  if (Notification.permission === 'denied') {
+    displayMessage('Notifications are blocked. Please enable them in browser settings.', true);
+    console.log('Notifications are permanently blocked. User needs to reset permissions manually.');
+    return;
+  }
+
+  if (Notification.permission !== 'granted') {
+    console.log('Requesting notification permission...');
+    displayMessage('Requesting notification permission...', false);
+    
+    const permission = await Notification.requestPermission();
+    console.log('Permission result:', permission);
+    
+    if (permission !== 'granted') {
+      displayMessage('Notification permission denied. Please enable notifications to subscribe.', true);
+      return;
+    }
   }
 
   try {
@@ -83,7 +143,7 @@ const subscribe = async () => {
 
     const result = await response.json();
     console.log('Server response:', result);
-    displayMessage('Successfully subscribed to push notifications!', false);
+    displayMessage(`Successfully subscribed! ID: ${result.id}. Expires: ${new Date(result.expiresAt).toLocaleDateString()}`, false);
     
   } catch (error) {
     console.error('Subscription error:', error);
@@ -99,7 +159,17 @@ const checkSubscriptions = async () => {
     const response = await fetch(subscriptionsEndpoint);
     const subscriptions = await response.json();
     console.log('Current subscriptions:', subscriptions);
-    displayMessage(`Found ${subscriptions.length} subscription(s). Check console for details.`, false);
+    
+    if (subscriptions.length > 0) {
+      console.table(subscriptions.map(sub => ({
+        id: sub.id,
+        createdAt: new Date(sub.createdAt).toLocaleString(),
+        expiresAt: new Date(sub.expiresAt).toLocaleString(),
+        endpoint: sub.subscription.endpoint.substring(0, 50) + '...'
+      })));
+    }
+    
+    displayMessage(`Found ${subscriptions.length} active subscription(s). Check console for details.`, false);
   } catch (error) {
     console.error('Error checking subscriptions:', error);
     displayMessage(`Error checking subscriptions: ${error.message}`, true);
@@ -178,6 +248,7 @@ const checkForServiceWorkers = async () => {
 
 // Event listeners
 subscribeButton.addEventListener('click', subscribe);
+checkPermissionsButton.addEventListener('click', checkNotificationPermission);
 checkSubscriptionsButton.addEventListener('click', checkSubscriptions);
 testNotificationButton.addEventListener('click', sendTestNotification);
 
@@ -185,7 +256,11 @@ testNotificationButton.addEventListener('click', sendTestNotification);
 document.addEventListener('DOMContentLoaded', () => {
   console.log('Page loaded, checking for service workers...');
   checkForServiceWorkers();
+  checkNotificationPermission();
+  updateDebugInfo();
 });
 
 // Also run the check immediately in case DOMContentLoaded already fired
 checkForServiceWorkers();
+checkNotificationPermission();
+updateDebugInfo();

@@ -4,6 +4,8 @@ import webpush from "web-push"
 import redis from "redis"
 import cors from "cors"
 import morgan from "morgan"
+import { v4 as uuidv4 } from "uuid"
+
 
 const port = 3003
 const app = express()
@@ -53,6 +55,28 @@ async function connectRedis() {
   }
 }
 
+// Utility functions
+const generateSubscriptionId = () => {
+  return uuidv4()
+}
+
+const createSubscriptionObject = (subscriptionData) => {
+  const now = new Date()
+  const expiryDate = new Date(now.getTime() + (365 * 24 * 60 * 60 * 1000)) // 365 days from now
+  
+  return {
+    id: generateSubscriptionId(),
+    subscription: subscriptionData,
+    createdAt: now.toISOString(),
+    expiresAt: expiryDate.toISOString(),
+    isActive: true
+  }
+}
+
+const isSubscriptionExpired = (subscriptionObj) => {
+  return new Date() > new Date(subscriptionObj.expiresAt)
+}
+
 // Connect to Redis
 connectRedis()
 
@@ -75,25 +99,40 @@ app.get("/", (req, res) => {
 
 app.get("/subscriptions", async (req, res) => {
   try {
-    console.log('Fetching subscriptions from Redis...')
+    console.log('Fetching all subscriptions from Redis...')
     
     if (!redisClient.isOpen) {
       throw new Error('Redis client is not connected')
     }
     
-    const subscriptions = await redisClient.sMembers("subscriptions")
-    console.log(`Found ${subscriptions.length} subscriptions in Redis`)
+    const subscriptionKeys = await redisClient.keys("subscription:*")
+    console.log(`Found ${subscriptionKeys.length} subscription keys in Redis`)
     
-    const parsedSubscriptions = subscriptions.map((sub) => {
+    if (subscriptionKeys.length === 0) {
+      return res.json([])
+    }
+
+    const subscriptions = await redisClient.mGet(subscriptionKeys)
+    const parsedSubscriptions = subscriptions.map((sub, index) => {
       try {
-        return JSON.parse(sub)
+        const parsed = JSON.parse(sub)
+        // Check if subscription is expired
+        if (isSubscriptionExpired(parsed)) {
+          console.log(`Subscription ${parsed.id} is expired, marking for cleanup`)
+          // Remove expired subscription asynchronously
+          redisClient.del(subscriptionKeys[index]).catch(err => 
+            console.error('Error deleting expired subscription:', err)
+          )
+          return null
+        }
+        return parsed
       } catch (error) {
         console.error('Error parsing subscription:', error)
         return null
       }
     }).filter(Boolean)
     
-    console.log('Returning subscriptions:', parsedSubscriptions.length)
+    console.log(`Returning ${parsedSubscriptions.length} active subscriptions`)
     res.json(parsedSubscriptions)
   } catch (error) {
     console.error('Error fetching subscriptions:', error.message)
@@ -101,14 +140,68 @@ app.get("/subscriptions", async (req, res) => {
   }
 })
 
+app.get("/subscriptions/:id", async (req, res) => {
+  try {
+    const { id } = req.params
+    console.log(`Fetching subscription with ID: ${id}`)
+    
+    if (!redisClient.isOpen) {
+      throw new Error('Redis client is not connected')
+    }
+    
+    const subscriptionData = await redisClient.get(`subscription:${id}`)
+    
+    if (!subscriptionData) {
+      return res.status(404).json({ error: 'Subscription not found' })
+    }
+    
+    const subscription = JSON.parse(subscriptionData)
+    
+    // Check if subscription is expired
+    if (isSubscriptionExpired(subscription)) {
+      console.log(`Subscription ${id} is expired, removing it`)
+      await redisClient.del(`subscription:${id}`)
+      return res.status(404).json({ error: 'Subscription not found or expired' })
+    }
+    
+    console.log(`Found subscription: ${id}`)
+    res.json(subscription)
+  } catch (error) {
+    console.error('Error fetching subscription:', error.message)
+    res.status(500).json({ error: 'Failed to fetch subscription', details: error.message })
+  }
+})
+
+app.delete("/unsubscribe/:id", async (req, res) => {
+  try {
+    const { id } = req.params
+    console.log(`Deleting subscription with ID: ${id}`)
+    
+    if (!redisClient.isOpen) {
+      throw new Error('Redis client is not connected')
+    }
+    
+    const result = await redisClient.del(`subscription:${id}`)
+    
+    if (result === 0) {
+      return res.status(404).json({ error: 'Subscription not found' })
+    }
+    
+    console.log(`Subscription ${id} deleted successfully`)
+    res.json({ message: 'Subscription deleted successfully', id })
+  } catch (error) {
+    console.error('Error deleting subscription:', error.message)
+    res.status(500).json({ error: 'Failed to delete subscription', details: error.message })
+  }
+})
 app.post("/subscribe", async (req, res) => {
   try {
-    const subscription = req.body
+    const subscriptionData = req.body
     console.log('Received subscription request')
-    console.log('Subscription endpoint:', subscription.endpoint)
-    console.log('Keys present:', !!subscription.keys)
+    console.log('Subscription endpoint:', subscriptionData.endpoint)
+    console.log('Keys present:', !!subscriptionData.keys)
     
-    if (!subscription || !subscription.endpoint || !subscription.keys) {
+    if (!subscriptionData || !subscriptionData.endpoint || !subscriptionData.keys) {
       return res.status(400).json({ error: 'Invalid subscription data' })
     }
     
@@ -116,19 +209,27 @@ app.post("/subscribe", async (req, res) => {
       throw new Error('Redis client is not connected')
     }
     
-    const subscriptionString = JSON.stringify(subscription)
-    const result = await redisClient.sAdd("subscriptions", subscriptionString)
+    // Create subscription object with ID and expiry
+    const subscriptionObj = createSubscriptionObject(subscriptionData)
+    const subscriptionString = JSON.stringify(subscriptionObj)
     
-    console.log(`Subscription saved to Redis. New subscription: ${result === 1}`)
+    // Store with the subscription ID as key
+    await redisClient.set(`subscription:${subscriptionObj.id}`, subscriptionString)
     
-    // Verify it was saved
-    const count = await redisClient.sCard("subscriptions")
-    console.log(`Total subscriptions in Redis: ${count}`)
+    // Set TTL for automatic cleanup (365 days)
+    await redisClient.expire(`subscription:${subscriptionObj.id}`, 365 * 24 * 60 * 60)
+    
+    console.log(`Subscription saved to Redis with ID: ${subscriptionObj.id}`)
+    
+    // Get total count of subscriptions
+    const allKeys = await redisClient.keys("subscription:*")
+    console.log(`Total subscriptions in Redis: ${allKeys.length}`)
     
     res.status(201).json({ 
       message: 'Subscription added successfully',
-      isNew: result === 1,
-      totalSubscriptions: count
+      id: subscriptionObj.id,
+      expiresAt: subscriptionObj.expiresAt,
+      totalSubscriptions: allKeys.length
     })
   } catch (error) {
     console.error('Error saving subscription:', error.message)
@@ -156,37 +257,51 @@ app.post("/send-notification", async (req, res) => {
       throw new Error('Redis client is not connected')
     }
     
-    const subscriptions = await redisClient.sMembers("subscriptions")
-    console.log(`Found ${subscriptions.length} subscriptions`)
+    const subscriptionKeys = await redisClient.keys("subscription:*")
+    console.log(`Found ${subscriptionKeys.length} subscription keys`)
     
-    if (subscriptions.length === 0) {
+    if (subscriptionKeys.length === 0) {
       console.log('No subscriptions found in Redis')
       return res.status(404).json({ error: 'No subscriptions found' })
     }
 
-    console.log('Sending notifications to all subscriptions...')
+    const subscriptions = await redisClient.mGet(subscriptionKeys)
+    console.log('Sending notifications to all active subscriptions...')
+    
     const results = []
+    let activeSubscriptions = 0
     
     for (let i = 0; i < subscriptions.length; i++) {
       try {
-        const subscription = JSON.parse(subscriptions[i])
-        console.log(`Sending notification ${i + 1}/${subscriptions.length}`)
+        const subscriptionObj = JSON.parse(subscriptions[i])
+        
+        // Check if subscription is expired
+        if (isSubscriptionExpired(subscriptionObj)) {
+          console.log(`Subscription ${subscriptionObj.id} is expired, skipping and removing`)
+          await redisClient.del(subscriptionKeys[i])
+          results.push({ success: false, id: subscriptionObj.id, error: 'Subscription expired' })
+          continue
+        }
+
+        activeSubscriptions++
+        console.log(`Sending notification ${activeSubscriptions}/${subscriptionKeys.length} to subscription ${subscriptionObj.id}`)
         
         await webpush.sendNotification(
-          subscription,
+          subscriptionObj.subscription,
           JSON.stringify(notificationPayload)
         )
         
-        results.push({ success: true, index: i })
-        console.log(`Notification ${i + 1} sent successfully`)
+        results.push({ success: true, id: subscriptionObj.id })
+        console.log(`Notification sent successfully to subscription ${subscriptionObj.id}`)
       } catch (error) {
-        console.error(`Failed to send notification ${i + 1}:`, error.message)
-        results.push({ success: false, index: i, error: error.message })
+        const subscriptionObj = subscriptions[i] ? JSON.parse(subscriptions[i]) : { id: 'unknown' }
+        console.error(`Failed to send notification to subscription ${subscriptionObj.id}:`, error.message)
+        results.push({ success: false, id: subscriptionObj.id, error: error.message })
         
         // If subscription is invalid, remove it
         if (error.statusCode === 410 || error.statusCode === 404) {
-          console.log(`Removing invalid subscription ${i + 1}`)
-          await redisClient.sRem("subscriptions", subscriptions[i])
+          console.log(`Removing invalid subscription ${subscriptionObj.id}`)
+          await redisClient.del(subscriptionKeys[i])
         }
       }
     }
@@ -200,6 +315,8 @@ app.post("/send-notification", async (req, res) => {
       message: "Notification sending completed",
       successful: successCount,
       failed: failureCount,
+      totalProcessed: subscriptionKeys.length,
+      activeSubscriptions: activeSubscriptions,
       results: results
     })
   } catch (error) {
@@ -208,13 +325,128 @@ app.post("/send-notification", async (req, res) => {
   }
 })
 
+app.post("/send-notification/:id", async (req, res) => {
+  try {
+    const { id } = req.params
+    const { title, body, icon } = req.body
+
+    console.log(`Received request to send notification to subscription ${id}`)
+
+    if (!redisClient.isOpen) {
+      throw new Error('Redis client is not connected')
+    }
+
+    const subscriptionData = await redisClient.get(`subscription:${id}`)
+    if (!subscriptionData) {
+      return res.status(404).json({ error: 'Subscription not found' })
+    }
+
+    const subscriptionObj = JSON.parse(subscriptionData)
+
+    // Check expiry
+    if (isSubscriptionExpired(subscriptionObj)) {
+      console.log(`Subscription ${id} is expired, removing it`)
+      await redisClient.del(`subscription:${id}`)
+      return res.status(404).json({ error: 'Subscription expired' })
+    }
+
+    const notificationPayload = {
+      notification: {
+        title: title || "New Notification",
+        body: body || "This is a new notification",
+        icon: icon || "/icon.png",
+      },
+    }
+
+    console.log(`Sending notification to subscription ${id}...`)
+    await webpush.sendNotification(
+      subscriptionObj.subscription,
+      JSON.stringify(notificationPayload)
+    )
+
+    console.log(`Notification sent successfully to ${id}`)
+    res.status(200).json({
+      message: "Notification sent successfully",
+      id: id
+    })
+  } catch (error) {
+    console.error(`Error sending notification to ${req.params.id}:`, error.message)
+    // Remove invalid subscription
+    if (error.statusCode === 410 || error.statusCode === 404) {
+      console.log(`Removing invalid subscription ${req.params.id}`)
+      await redisClient.del(`subscription:${req.params.id}`)
+    }
+    res.status(500).json({
+      error: 'Failed to send notification',
+      details: error.message
+    })
+  }
+})
+
+
 // Health check endpoint
-app.get("/health", (req, res) => {
-  res.json({ 
-    status: "OK", 
-    redis: redisClient.isOpen ? "connected" : "disconnected",
-    timestamp: new Date().toISOString()
-  })
+app.get("/health", async (req, res) => {
+  try {
+    let subscriptionCount = 0
+    if (redisClient.isOpen) {
+      const keys = await redisClient.keys("subscription:*")
+      subscriptionCount = keys.length
+    }
+    
+    res.json({ 
+      status: "OK", 
+      redis: redisClient.isOpen ? "connected" : "disconnected",
+      totalSubscriptions: subscriptionCount,
+      timestamp: new Date().toISOString()
+    })
+  } catch (error) {
+    res.json({ 
+      status: "OK", 
+      redis: redisClient.isOpen ? "connected" : "disconnected",
+      totalSubscriptions: "unknown",
+      timestamp: new Date().toISOString()
+    })
+  }
+})
+
+// Cleanup expired subscriptions endpoint (optional - for manual cleanup)
+app.post("/cleanup-expired", async (req, res) => {
+  try {
+    console.log('Starting cleanup of expired subscriptions...')
+    
+    if (!redisClient.isOpen) {
+      throw new Error('Redis client is not connected')
+    }
+    
+    const subscriptionKeys = await redisClient.keys("subscription:*")
+    let expiredCount = 0
+    
+    for (const key of subscriptionKeys) {
+      try {
+        const subscriptionData = await redisClient.get(key)
+        if (subscriptionData) {
+          const subscription = JSON.parse(subscriptionData)
+          if (isSubscriptionExpired(subscription)) {
+            await redisClient.del(key)
+            expiredCount++
+            console.log(`Removed expired subscription: ${subscription.id}`)
+          }
+        }
+      } catch (error) {
+        console.error(`Error processing subscription key ${key}:`, error.message)
+      }
+    }
+    
+    console.log(`Cleanup complete. Removed ${expiredCount} expired subscriptions.`)
+    res.json({ 
+      message: 'Cleanup completed',
+      expiredSubscriptionsRemoved: expiredCount,
+      totalProcessed: subscriptionKeys.length
+    })
+  } catch (error) {
+    console.error('Error during cleanup:', error.message)
+    res.status(500).json({ error: 'Failed to cleanup expired subscriptions', details: error.message })
+  }
 })
 
 // Error handling middleware
