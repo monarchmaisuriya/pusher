@@ -14,14 +14,27 @@ A simple push notification system using Node.js, Express, Redis, and web-push.
 
 The project is divided into two main directories:
 
-- `/server`: This directory contains the backend application built with Node.js and Express. It is responsible for:
-  - Exposing a REST API.
-  - Saving push notification subscriptions to a Redis database.
-  - Sending push notifications to registered clients when triggered by an API call.
-- `/client`: This directory contains the static frontend files (HTML, JavaScript, and CSS). This is the web page that users interact with. It handles:
-  - Requesting permission from the user to show notifications.
-  - Creating a push subscription and sending it to the server to be stored.
-  - Providing buttons to test the notification system.
+### `/server` Directory
+Contains the backend Node.js application that handles push notification management:
+- **`src/server.js`**: Main Express server with REST API endpoints
+- **`package.json`**: Node.js dependencies including express, redis, web-push, and cors
+- **Features**:
+  - REST API for subscription management and notification sending
+  - Redis integration for persistent subscription storage
+  - VAPID key configuration for web push notifications
+  - CORS support for cross-origin requests from the client
+  - Health check and cleanup endpoints
+
+### `/client` Directory
+Contains the frontend web application for user interaction:
+- **`index.html`**: Main HTML page with notification controls and status display
+- **`main.js`**: Client-side JavaScript handling subscription management and API communication
+- **`service-worker.js`**: Service worker for receiving and displaying push notifications
+- **Features**:
+  - Browser notification permission handling
+  - Push subscription creation and management
+  - Real-time notification testing interface
+  - Debug information and subscription status display
 
 ## Prerequisites
 
@@ -49,40 +62,88 @@ The server will start on `http://localhost:3003`.
 
 ### 2. Client Setup
 
-In a separate terminal, serve the client-side files using a simple live server. The `npx http-server` command is a straightforward way to do this.
+In a separate terminal, serve the client-side files using a simple HTTP server. We recommend using `npx http-server` for easy setup:
 
 ```bash
 # Navigate to the client directory
 cd pusher/client
 
-# Serve the client files
+# Serve the client files using npx http-server
 npx http-server
 ```
 
-This will typically serve the client on `http://localhost:8080`.
+This will typically serve the client on `http://localhost:8080`. The `npx http-server` command:
+- Serves static files from the current directory
+- Automatically opens your default browser (optional)
+- Provides CORS headers needed for the push notification API
+- No installation required - runs directly via npx
 
 ## Usage
 
-1.  **Open the Client:** Open your web browser and navigate to the client URL provided by the `http-server` (e.g., `http://localhost:8080`).
+### Getting Started
 
-2.  **Subscribe:** Click the **"Subscribe"** button. Your browser will prompt you for permission to show notifications. Click "Allow". This action registers your browser with the server to receive push notifications.
+1. **Start Both Services**: Ensure both the server (port 3003) and client (port 8080) are running as described in the Setup section.
 
-3.  **Send a Test Notification:** You can trigger a test notification in two ways:
+2. **Open the Client**: Navigate to `http://localhost:8080` in your web browser.
 
-    - **From the Client:** Click the **"Send Test Notification"** button. The server will immediately send a notification to all subscribed clients, including yours.
-    - **Using `curl`:** You can trigger a notification directly via the API from your command line:
-      ```bash
-      curl -X POST -H "Content-Type: application/json" \
-           -d '{"title": "Hello from curl!", "body": "This is a custom notification."}' \
-           http://localhost:3003/send-notification
-      ```
+### Client Interface Features
 
-4.  **Check Subscriptions:** You can see how many clients are currently subscribed:
-    - **From the Client:** Click the **"Check Subscriptions"** button. The number of active subscriptions will be displayed on the page, and the full subscription details will be logged in the browser's developer console.
-    - **Using `curl`:**
-      ```bash
-      curl http://localhost:3003/subscriptions
-      ```
+#### 1. **Subscribe to Notifications**
+- Click the **"Subscribe"** button
+- Your browser will prompt for notification permission - click "Allow"
+- This registers your browser with the server to receive push notifications
+- The page will display your subscription status and browser support information
+
+#### 2. **Check Notification Permissions**
+- Click **"Check Permissions"** to verify your browser's notification settings
+- Shows current permission status (granted, denied, or default)
+- Displays browser compatibility information
+
+#### 3. **View Active Subscriptions**
+- Click **"Check Subscriptions"** to see all registered clients
+- Displays the total number of active subscriptions
+- Full subscription details are logged in the browser console (F12)
+
+#### 4. **Send Test Notifications**
+- Click **"Send Test Notification"** to trigger a notification to all subscribed clients
+- The notification will appear even if the browser tab is not active
+- Useful for testing the complete notification flow
+
+### API Testing with curl
+
+You can also interact with the server directly using curl commands:
+
+#### Send Notification to All Subscribers
+```bash
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"title": "Hello from curl!", "body": "This is a custom notification."}' \
+     http://localhost:3003/send-notification
+```
+
+#### Check All Subscriptions
+```bash
+curl http://localhost:3003/subscriptions
+```
+
+#### Health Check
+```bash
+curl http://localhost:3003/health
+```
+
+#### Send Notification to Specific Client
+```bash
+# First get subscription ID from /subscriptions endpoint
+curl -X POST -H "Content-Type: application/json" \
+     -d '{"title": "Personal Message", "body": "This is for you!"}' \
+     http://localhost:3003/send-notification/SUBSCRIPTION_ID
+```
+
+### Troubleshooting
+
+- **No notifications appearing**: Check browser permissions and ensure the service worker is registered
+- **CORS errors**: Make sure both server and client are running on their respective ports
+- **Redis connection issues**: Verify Redis is running on the default port 6379
+- **Service worker issues**: Check the browser console for registration errors
 
 ## API Endpoints
 
