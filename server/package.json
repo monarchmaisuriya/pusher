@@ -1,0 +1,21 @@
+{
+  "name": "pusher-server",
+  "version": "1.0.0",
+  "description": "Server for the push notification service",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.1",
+    "redis": "^4.6.13",
+    "web-push": "^3.6.7"
+  }
+}
